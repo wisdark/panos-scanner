@@ -6,8 +6,13 @@ https://www.bishopfox.com/continuous-attack-surface-testing/how-cast-works/
 
 Author:     @noperator
 Purpose:    Determine the software version of a remote PAN-OS target.
-Notes:      Requires version-table.txt in the same directory.
-Usage:      panos-scanner.py [-h] [-v] -t TARGET
+Notes:      - Requires version-table.txt in the same directory.
+            - Usage of this tool for attacking targets without prior mutual
+              consent is illegal. It is the end user's responsibility to obey
+              all applicable local, state, and federal laws. Developers assume
+              no liability and are not responsible for any misuse or damage
+              caused by this program.
+Usage:      python3 panos-scanner.py [-h] [-v] [-s] -t TARGET
 '''
 
 from argparse import ArgumentParser
@@ -44,17 +49,18 @@ def get_resource(target, resources, date_headers, errors, verbose):
         resp = get(
             '%s/%s' % (target, resource),
             headers=headers,
-            timeout=10,
+            timeout=5,
             verify=False
         )
-        if verbose:
-            sym = '+' if resp.ok else '-'
-            print('[%s]' % sym, resp.status_code, resource, file=stderr)
         resp.raise_for_status()
+        if verbose:
+            print('[+]', resource, file=stderr)
         return {h: resp.headers[h].strip('"') for h in date_headers
                 if h in resp.headers}
     except (HTTPError, ReadTimeout) as e:
-        pass
+        if verbose:
+            print('[-]', resource, '({})'.format(type(e).__name__), file=stderr)
+        return None
     except errors as e:
         raise e
 
@@ -78,36 +84,67 @@ def check_date(version_table, date):
             matches[key] = {'date': nearby_date, 'versions': versions}
     return matches
 
+def get_matches(date_headers, resp_headers, verbose=False):
+    matches = {}
+    for header in date_headers.keys():
+        if header in resp_headers:
+            date = globals()[date_headers[header]](resp_headers[header])
+            date_matches = check_date(version_table, date)
+            for precision, match in date_matches.items():
+                if match['versions']:
+                    if precision not in matches.keys():
+                        matches[precision] = []
+                    matches[precision].append(match)
+                    if verbose:
+                        print(
+                            '[*]',
+                            '%s ~ %s' % (date, match['date']) if date != match['date'] else date,
+                            '=>',
+                            ','.join(match['versions']),
+                            file=stderr
+                        )
+    return matches
+
 if __name__ == '__main__':
 
     parser = ArgumentParser('Determine the software version of a remote PAN-OS target. Requires version-table.txt in the same directory.')
     parser.add_argument('-v', dest='verbose', action='store_true', help='verbose output')
+    parser.add_argument('-s', dest='stop', action='store_true', help='stop after one exact match')
     parser.add_argument('-t', dest='target', required=True, help='https://example.com')
     args = parser.parse_args()
 
     static_resources = [
         'global-protect/login.esp',
-        'global-protect/portal/css/login.css',
-        'global-protect/portal/images/favicon.ico',
-        'global-protect/portal/images/logo-pan-48525a.svg',
         'php/login.php',
-        'login/images/favicon.ico',
+        'global-protect/portal/css/login.css',
         'js/Pan.js',
+        'global-protect/portal/images/favicon.ico',
+        'login/images/favicon.ico',
+        'global-protect/portal/images/logo-pan-48525a.svg',
     ]
 
     version_table = load_version_table('version-table.txt')
 
+    # The keys in "date_headers" represent HTTP response headers that we're
+    # looking for. Each of those headers maps to a function in this namespace
+    # that knows how to decode that header value into a datetime.
     date_headers = {
         'ETag':          'etag_to_datetime',
         'Last-Modified': 'last_modified_to_datetime'
     }
 
+    # A match is a dictionary containing a date/version pair. When populated,
+    # each precision key (i.e., "exact" and "approximate") in this
+    # "total_matches" data structure will map to a single list of possibly
+    # several match dictionaries.
     total_matches = {
         'exact': [],
         'approximate': []
     }
 
-    errors = (ConnectTimeout, SSLError, ConnectionError)
+    # These errors are indicative of target-level issues. Don't continue
+    # requesting other resources when encountering these; instead, bail.
+    target_errors = (ConnectTimeout, SSLError, ConnectionError)
 
     if args.verbose:
         print('[*]', args.target, file=stderr)
@@ -119,37 +156,28 @@ if __name__ == '__main__':
                 args.target,
                 resource,
                 date_headers.keys(),
-                errors,
+                target_errors,
                 args.verbose
             )
-        except errors as e:
-            print('[-]', args.target, type(e).__name__, file=stderr)
+        except target_errors as e:
+            print(type(e).__name__, file=stderr)
             exit(1)
         if resp_headers == None:
             continue
 
         # Convert date-related HTTP headers to a standardized format, and
         # store any matching version strings.
-        for header in date_headers.keys():
-            if header in resp_headers:
-                date = globals()[date_headers[header]](resp_headers[header])
-                matches = check_date(version_table, date)
-                for precision, match in matches.items():
-                    if match['versions']:
-                        total_matches[precision].append(match)
-                        if args.verbose:
-                            print(
-                                '[*]',
-                                '%s ~ %s' % (date, match['date']) if date != match['date'] else date,
-                                '=>',
-                                ','.join(match['versions']),
-                                file=stderr
-                            )
+        total_matches.update(get_matches(date_headers, resp_headers, args.verbose))
+        if args.stop and len(total_matches['exact']):
+            break
 
     # Print results.
-    printed = []
-    for precision, matches in total_matches.items():
-        for match in matches:
-            if match['versions'] and match not in printed:
-                printed.append(match)
-                print(','.join(match['versions']), match['date'], '(%s)' % precision)
+    if not len(sum(total_matches.values(), [])):
+        print('no matches found')
+    else:
+        printed = []
+        for precision, matches in total_matches.items():
+            for match in matches:
+                if match['versions'] and match not in printed:
+                    printed.append(match)
+                    print(','.join(match['versions']), match['date'], '(%s)' % precision)
