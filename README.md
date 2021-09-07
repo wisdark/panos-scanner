@@ -63,25 +63,24 @@ optional arguments:
   -h, --help  show this help message and exit
   -v          verbose output
   -s          stop after one exact match
-  -c          link to PAN-OS CVE URL for matching versions
   -t TARGET   https://example.com
 ```
 
 In the following example, `https://example.com/global-protect/portal/images/favicon.ico` has an HTTP response header that indicates that it's running PAN-OS version `8.0.10`.
 
 ```
-$ python3 panos-scanner.py -t https://example.com
-8.0.10 2018-05-04 (exact)
+$ python3 panos-scanner.py -s -t https://example.com | jq '.match'
+{
+  "date": "2018-05-04",
+  "versions": [
+    "8.0.10"
+  ],
+  "precision": "exact",
+  "resource": "global-protect/portal/images/favicon.ico"
+}
 ```
 
-The tool can conveniently print a URL taking you to a list of Palo Alto's security advisories filtered on the matching PAN-OS version.
-
-```
-$ python3 panos-scanner.py -c -t https://example.com
-[*] CVEs for PAN-OS v8.0:
-[*] https://security.paloaltonetworks.com/?product=PAN-OS&version=PAN-OS+8.0
-8.0.10 2018-05-04 (exact)
-```
+<!--
 
 Also supports verbose output.
 
@@ -123,6 +122,8 @@ https://doublematchexample.com  8.1.12 2019-12-10 (exact)  9.1.0 2019-12-11 (app
 http://nonexistentexample.com   ConnectionError
 ```
 
+-->
+
 ## Back matter
 
 ### Legal disclaimer
@@ -144,7 +145,7 @@ Thanks [@k4nfr3](https://github.com/k4nfr3) for providing updates to the version
 - [x] Stop after one exact match
 - [x] Simplify output
 - [x] Support verbose CLI option
-- [ ] Perhaps output JSON instead, to be processed with `jq`
+- [x] Perhaps output JSON instead, to be processed with `jq`
 
 ### License
 
